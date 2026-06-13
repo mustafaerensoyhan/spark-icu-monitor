@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+stream_input/
+checkpoint/
+spark-warehouse/
+*.crc
+smoke_test.py
+.DS_Store
+data/archive.zip
+data/patients_data_with_alerts.xlsx
