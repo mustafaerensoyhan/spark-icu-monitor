@@ -82,3 +82,20 @@ Within about a minute, Terminal 1 prints the elevated windows and the
 IoMT health-monitoring dataset (Kaggle). The generator auto-detects the
 heart-rate column, and falls back to realistic synthetic values if the CSV is
 absent, so the pipeline always runs.
+
+## Late-data demonstration (watermark)
+
+To see the watermark drop out-of-order data, run the demo script instead of the
+monitor:
+
+Terminal 1:
+
+    python src/late_data_demo.py
+
+Terminal 2:
+
+    python src/stream_generator.py --late
+
+The generator sends the normal stream and then injects three readings stamped at
+08:05:00. By the time they arrive, event time has advanced past the 2-minute
+watermark, so the demo prints them as dropped - their window has already closed.

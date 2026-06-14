@@ -4,6 +4,7 @@ __pycache__/
 stream_input/
 checkpoint/
 checkpoint_audit/
+checkpoint_late/
 output/
 spark-warehouse/
 *.crc

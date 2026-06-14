@@ -68,3 +68,30 @@ the sustained-alert path is exercised and observable.
   an in-memory dictionary on the driver: simple and correct for this scope, but
   not checkpointed. A production version would keep this entirely inside Spark
   (e.g. a stream-stream self-join of consecutive windows), so it survives restarts.
+
+## On keeping the consecutive-window state inside Spark
+
+A natural question is whether the two-consecutive-window check could live entirely
+inside Spark's managed state instead of the driver-side dictionary. This was
+investigated, and the result is itself instructive about Structured Streaming's
+design:
+
+- `applyInPandasWithState` (arbitrary stateful processing) cannot be chained in
+  append mode directly after a windowed aggregation. Spark rejects the plan with:
+  "applyInPandasWithState in append mode is not supported after aggregation".
+- A stream-stream self-join of consecutive windows is nominally supported through
+  watermark propagation, but chaining it after the windowed aggregation did not
+  reliably emit in testing - a known sharp edge of multiple stateful operators.
+
+Because Spark restricts chaining a second stateful operator after a windowed
+aggregation, the idiomatic and officially recommended pattern for cross-window
+logic that the engine cannot express natively is `foreachBatch`, which is exactly
+what this pipeline uses. The windowed average remains fully Spark-managed and
+checkpointed; only the lightweight comparison of the current window against the
+previous one is held on the driver.
+
+For production fault tolerance, that comparison could be moved into Spark's state
+store by decoupling into two queries: query one writes finalized elevated windows
+to a sink, and query two consumes them as a fresh stream and applies
+`applyInPandasWithState` - which is permitted because its input is no longer an
+aggregation. This is noted as the natural next step.
