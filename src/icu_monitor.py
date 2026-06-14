@@ -2,17 +2,12 @@
 """
 ICU heart-rate monitor - Spark Structured Streaming (Scenario B).
 
-Reads a stream of (event_time, patient_id, heart_rate) rows from a watched
-folder, groups them into TUMBLING 2-minute windows, computes each patient's
-average heart rate per window, and raises a SUSTAINED clinical alert when a
-patient's average exceeds 100 bpm in TWO CONSECUTIVE windows (so a single
-spike does not trigger it - only a sustained elevation does).
-
-Pipeline:
-  readStream(watched dir) -> parse event_time -> withWatermark(2 min)
-  -> groupBy(2-min tumbling window, patient) -> avg(hr)
-  -> filter(avg_hr > 100)   # the filtered alert output stream
-  -> foreachBatch -> escalate to a SUSTAINED alert on 2 consecutive windows
+Two outputs from one streaming pipeline:
+  * AUDIT  : every finalized (patient, window) average is appended to CSV, giving
+             a complete record of all patients - not only the alarms.
+  * ALERTS : windows above 100 bpm are filtered into an alert stream and escalated
+             to a SUSTAINED clinical alert when a patient is elevated in two
+             consecutive windows.
 
 Where state lives:
   1. Spark-managed: the windowed average per (patient, window), bounded by the
@@ -31,6 +26,8 @@ from pyspark.sql.types import StructType, StructField, StringType, DoubleType
 
 INPUT_DIR = "stream_input"
 CHECKPOINT_DIR = "checkpoint"
+AUDIT_CHECKPOINT_DIR = "checkpoint_audit"
+AUDIT_OUTPUT_DIR = "output/window_averages"
 WINDOW_DURATION = "2 minutes"
 WATERMARK_DELAY = "2 minutes"
 HR_THRESHOLD = 100.0
@@ -66,8 +63,9 @@ def handle_batch(batch_df, batch_id):
 
 
 def main():
-    if os.path.exists(CHECKPOINT_DIR):
-        shutil.rmtree(CHECKPOINT_DIR)
+    for d in (CHECKPOINT_DIR, AUDIT_CHECKPOINT_DIR, "output"):
+        if os.path.exists(d):
+            shutil.rmtree(d)
     os.makedirs(INPUT_DIR, exist_ok=True)
 
     spark = (SparkSession.builder
@@ -91,23 +89,34 @@ def main():
                 .groupBy(window(col("event_time"), WINDOW_DURATION), col("patient_id"))
                 .agg(avg("heart_rate").alias("avg_hr")))
 
-    elevated = (windowed
-                .filter(col("avg_hr") > HR_THRESHOLD)
-                .select(
-                    col("window.start").alias("win_start"),
-                    col("window.end").alias("win_end"),
-                    col("patient_id"),
-                    col("avg_hr")))
+    all_windows = windowed.select(
+        col("window.start").alias("win_start"),
+        col("window.end").alias("win_end"),
+        col("patient_id"),
+        col("avg_hr"))
 
-    query = (elevated.writeStream
-             .outputMode("append")
-             .foreachBatch(handle_batch)
-             .option("checkpointLocation", CHECKPOINT_DIR)
-             .trigger(processingTime="2 seconds")
-             .start())
+    elevated = all_windows.filter(col("avg_hr") > HR_THRESHOLD)
+
+    # AUDIT sink: every window average, for every patient, appended to CSV.
+    audit_query = (all_windows.writeStream
+                   .outputMode("append")
+                   .format("csv")
+                   .option("path", AUDIT_OUTPUT_DIR)
+                   .option("header", "true")
+                   .option("checkpointLocation", AUDIT_CHECKPOINT_DIR)
+                   .trigger(processingTime="2 seconds")
+                   .start())
+
+    # ALERT sink: filtered elevated stream + two-consecutive-window escalation.
+    alert_query = (elevated.writeStream
+                   .outputMode("append")
+                   .foreachBatch(handle_batch)
+                   .option("checkpointLocation", CHECKPOINT_DIR)
+                   .trigger(processingTime="2 seconds")
+                   .start())
 
     print("ICU monitor running. Waiting for windows to close...")
-    query.awaitTermination()
+    spark.streams.awaitAnyTermination()
 
 
 if __name__ == "__main__":

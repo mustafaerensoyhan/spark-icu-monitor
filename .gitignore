@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 stream_input/
 checkpoint/
+checkpoint_audit/
+output/
 spark-warehouse/
 *.crc
 smoke_test.py

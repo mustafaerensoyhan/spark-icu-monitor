@@ -49,3 +49,22 @@ live ICU telemetry feed, the stream generator replays these real heart-rate valu
 into a watched directory, assigning patient IDs and a compressed event-time clock.
 Two patients are deliberately driven above threshold for two consecutive windows so
 the sustained-alert path is exercised and observable.
+
+## Limitations and design choices
+
+- **The dataset is a snapshot, not a time series.** The IoMT dataset records one
+  row per patient, with no native timestamp or per-patient sequence of readings.
+  A real ICU feed would stream many readings per patient over time. The generator
+  bridges this by replaying the real heart-rate values as a timestamped,
+  per-patient stream using a compressed event-time clock. This faithfully
+  simulates the streaming mechanics; the temporal pattern is generated, not measured.
+- **The anomaly is injected deliberately.** Two patients are driven above
+  threshold for two consecutive windows so the alert path is exercised and
+  reproducible. The same code fires on genuine elevations in production.
+- **Compressed event time.** Event time advances 30 simulated seconds per batch
+  while the generator sleeps ~1.5 real seconds, so a 2-minute window closes within
+  seconds. The windowing is unaffected because Spark windows on event time.
+- **Driver-side consecutive-window state.** The two-consecutive-window check uses
+  an in-memory dictionary on the driver: simple and correct for this scope, but
+  not checkpointed. A production version would keep this entirely inside Spark
+  (e.g. a stream-stream self-join of consecutive windows), so it survives restarts.
